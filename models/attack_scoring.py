@@ -1,20 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Dict, List, Iterable, Any, Optional
 
 
 @dataclass
 class AttackScoreWeights:
     """
-    Q1 综合评分权重配置。
+    Q1 综合评分权重配置（最终表对齐版）。
 
-    设计思想：
-    1. 总分 = 攻击收益 + 稳定性收益 + 能耗收益
-    2. 其中稳定性收益 = 100 - 稳定性惩罚
-    3. 能耗收益 = 100 - 能耗惩罚
-
-    这样最终 total_score 更直观，范围通常在 0~100 附近。
+    设计口径：
+    1. 以最终表中的连续变量为主，1-5 映射字段为辅；
+    2. 总分 = 攻击收益 + 稳定性收益 + 能耗收益；
+    3. 稳定性收益 = 100 - 稳定性惩罚，能耗收益 = 100 - 能耗惩罚。
     """
 
     # 三大项总权重（建议和为 1）
@@ -23,20 +21,27 @@ class AttackScoreWeights:
     energy_efficiency_weight: float = 0.15
 
     # 攻击收益内部权重（建议和为 1）
-    kinetic_energy_w: float = 0.28
-    avg_impact_force_w: float = 0.28
-    momentum_w: float = 0.16
-    impact_level_w: float = 0.10
-    accuracy_level_w: float = 0.07
-    balance_break_level_w: float = 0.06
-    combo_potential_w: float = 0.03
-    pressure_potential_w: float = 0.02
+    force_w: float = 0.22
+    kinetic_energy_w: float = 0.18
+    momentum_w: float = 0.10
+    break_w: float = 0.18
+    combo_w: float = 0.10
+    accuracy_w: float = 0.10
+    pressure_w: float = 0.07
+    reach_w: float = 0.05
 
     # 稳定性惩罚内部权重（建议和为 1）
-    support_loss_w: float = 0.32
-    rotation_risk_w: float = 0.28
-    recovery_burden_w: float = 0.22
-    exposure_w: float = 0.18
+    pfall_w: float = 0.30
+    vuln_w: float = 0.20
+    trec_w: float = 0.14
+    support_loss_w: float = 0.14
+    rotation_risk_w: float = 0.10
+    recovery_burden_w: float = 0.07
+    exposure_w: float = 0.05
+
+    # 能耗惩罚内部权重（建议和为 1）
+    cstam_w: float = 0.70
+    time_cost_w: float = 0.30
 
 
 DEFAULT_WEIGHTS = AttackScoreWeights()
@@ -74,12 +79,9 @@ def _build_ranges(records: List[Dict[str, Any]], fields: List[str]) -> Dict[str,
 
 
 def _build_prior_map(action_priors: Optional[Iterable[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
-    """
-    将 action_library 的原始动作先验转成 code -> dict 的映射。
-    """
     if action_priors is None:
         return {}
-    prior_map = {}
+    prior_map: Dict[str, Dict[str, Any]] = {}
     for item in action_priors:
         code = item.get("code", "")
         if code:
@@ -93,9 +95,7 @@ def _merge_dynamics_with_priors(
 ) -> List[Dict[str, Any]]:
     """
     将 attack_dynamics.py 的结果与 action_library.py 的原始先验按 code 合并。
-    优点：
-    - dynamics 负责物理代理量
-    - priors 提供 impact_level / accuracy_level / combo_potential 等战术先验
+    当前版优先保留 dynamics 里的派生量，同时补齐动作库中的连续量与 1-5 映射量。
     """
     prior_map = _build_prior_map(action_priors)
     merged_records: List[Dict[str, Any]] = []
@@ -114,40 +114,48 @@ def _merge_dynamics_with_priors(
     return merged_records
 
 
-def compute_impact_score(
+def compute_attack_gain_score(
     record: Dict[str, Any],
     ranges: Dict[str, tuple[float, float]],
     weights: AttackScoreWeights = DEFAULT_WEIGHTS,
 ) -> float:
     """
     计算攻击收益分：数值越高越好。
-    同时融合动力学指标和动作先验指标。
+    以最终表中的连续变量为主，兼容 1-5 战术映射分。
     """
     score = 0.0
 
-    score += weights.kinetic_energy_w * _normalize(
-        _to_float(record.get("kinetic_energy", 0.0)), *ranges["kinetic_energy"]
+    score += weights.force_w * _normalize(
+        _to_float(record.get("F", record.get("avg_impact_force", 0.0))),
+        *ranges["F"],
     )
-    score += weights.avg_impact_force_w * _normalize(
-        _to_float(record.get("avg_impact_force", 0.0)), *ranges["avg_impact_force"]
+    score += weights.kinetic_energy_w * _normalize(
+        _to_float(record.get("Ek", record.get("kinetic_energy", 0.0))),
+        *ranges["Ek"],
     )
     score += weights.momentum_w * _normalize(
-        _to_float(record.get("momentum", 0.0)), *ranges["momentum"]
+        _to_float(record.get("momentum", 0.0)),
+        *ranges["momentum"],
     )
-    score += weights.impact_level_w * _normalize(
-        _to_float(record.get("impact_level", 0.0)), *ranges["impact_level"]
+    score += weights.break_w * _normalize(
+        _to_float(record.get("Kbreak", record.get("balance_break_level", 0.0))),
+        *ranges["Kbreak"],
     )
-    score += weights.accuracy_level_w * _normalize(
-        _to_float(record.get("accuracy_level", 0.0)), *ranges["accuracy_level"]
+    score += weights.combo_w * _normalize(
+        _to_float(record.get("Ccombo", record.get("combo_potential", 0.0))),
+        *ranges["Ccombo"],
     )
-    score += weights.balance_break_level_w * _normalize(
-        _to_float(record.get("balance_break_level", 0.0)), *ranges["balance_break_level"]
+    score += weights.accuracy_w * _normalize(
+        _to_float(record.get("accuracy_level", 0.0)),
+        *ranges["accuracy_level"],
     )
-    score += weights.combo_potential_w * _normalize(
-        _to_float(record.get("combo_potential", 0.0)), *ranges["combo_potential"]
+    score += weights.pressure_w * _normalize(
+        _to_float(record.get("pressure_potential", 0.0)),
+        *ranges["pressure_potential"],
     )
-    score += weights.pressure_potential_w * _normalize(
-        _to_float(record.get("pressure_potential", 0.0)), *ranges["pressure_potential"]
+    score += weights.reach_w * _normalize(
+        _to_float(record.get("Lreach", 0.0)),
+        *ranges["Lreach"],
     )
 
     return score
@@ -160,20 +168,37 @@ def compute_stability_penalty(
 ) -> float:
     """
     计算稳定性惩罚：数值越高越差。
+    以最终表中的失稳率/暴露度/硬直为主，并兼容 dynamics 代理量。
     """
     penalty = 0.0
 
+    penalty += weights.pfall_w * _normalize(
+        _to_float(record.get("Pfall", record.get("p_fall", 0.0))),
+        *ranges["Pfall"],
+    )
+    penalty += weights.vuln_w * _normalize(
+        _to_float(record.get("Vvul", record.get("counter_risk", 0.0))),
+        *ranges["Vvul"],
+    )
+    penalty += weights.trec_w * _normalize(
+        _to_float(record.get("Trec", record.get("recovery_time", 0.0))),
+        *ranges["Trec"],
+    )
     penalty += weights.support_loss_w * _normalize(
-        _to_float(record.get("support_loss_proxy", 0.0)), *ranges["support_loss_proxy"]
+        _to_float(record.get("support_loss_proxy", 0.0)),
+        *ranges["support_loss_proxy"],
     )
     penalty += weights.rotation_risk_w * _normalize(
-        _to_float(record.get("rotation_risk_proxy", 0.0)), *ranges["rotation_risk_proxy"]
+        _to_float(record.get("rotation_risk_proxy", 0.0)),
+        *ranges["rotation_risk_proxy"],
     )
     penalty += weights.recovery_burden_w * _normalize(
-        _to_float(record.get("recovery_burden_proxy", 0.0)), *ranges["recovery_burden_proxy"]
+        _to_float(record.get("recovery_burden_proxy", 0.0)),
+        *ranges["recovery_burden_proxy"],
     )
     penalty += weights.exposure_w * _normalize(
-        _to_float(record.get("exposure_proxy", 0.0)), *ranges["exposure_proxy"]
+        _to_float(record.get("exposure_proxy", 0.0)),
+        *ranges["exposure_proxy"],
     )
 
     return penalty
@@ -182,15 +207,21 @@ def compute_stability_penalty(
 def compute_energy_penalty(
     record: Dict[str, Any],
     ranges: Dict[str, tuple[float, float]],
+    weights: AttackScoreWeights = DEFAULT_WEIGHTS,
 ) -> float:
     """
     计算能耗惩罚：数值越高越差。
-    这里先仅使用 energy_cost，后续也可以扩展加入 time_cost。
+    当前版同时考虑最终表中的 Cstam 与 time_cost。
     """
-    return _normalize(
-        _to_float(record.get("energy_cost", 0.0)),
-        *ranges["energy_cost"]
+    cstam_penalty = _normalize(
+        _to_float(record.get("Cstam", record.get("stamina_cost_raw", record.get("energy_cost", 0.0)))),
+        *ranges["Cstam"],
     )
+    time_penalty = _normalize(
+        _to_float(record.get("time_cost", 0.0)),
+        *ranges["time_cost"],
+    )
+    return weights.cstam_w * cstam_penalty + weights.time_cost_w * time_penalty
 
 
 def compute_total_score(
@@ -198,14 +229,10 @@ def compute_total_score(
     ranges: Dict[str, tuple[float, float]],
     weights: AttackScoreWeights = DEFAULT_WEIGHTS,
 ) -> Dict[str, float]:
-    """
-    计算单个动作的三项分数与总分。
-    """
-    attack_gain_score = compute_impact_score(record, ranges, weights)
+    attack_gain_score = compute_attack_gain_score(record, ranges, weights)
     stability_penalty_score = compute_stability_penalty(record, ranges, weights)
-    energy_penalty_score = compute_energy_penalty(record, ranges)
+    energy_penalty_score = compute_energy_penalty(record, ranges, weights)
 
-    # 惩罚转收益，越稳定/越省能越接近 100
     stability_benefit_score = 100.0 - stability_penalty_score
     energy_efficiency_score = 100.0 - energy_penalty_score
 
@@ -236,25 +263,27 @@ def score_actions(
     参数：
     - dynamics_results: 来自 attack_dynamics.py 的输出
     - action_priors: 可选，来自 action_library.py 的动作原始先验
-                     建议传入，这样可以把 impact_level 等一并纳入评分
     """
     merged_records = _merge_dynamics_with_priors(dynamics_results, action_priors)
 
-    # 用于评分的字段
     score_fields = [
-        "kinetic_energy",
-        "avg_impact_force",
+        "F",
+        "Ek",
         "momentum",
-        "impact_level",
+        "Kbreak",
+        "Ccombo",
         "accuracy_level",
-        "balance_break_level",
-        "combo_potential",
         "pressure_potential",
+        "Lreach",
+        "Pfall",
+        "Vvul",
+        "Trec",
         "support_loss_proxy",
         "rotation_risk_proxy",
         "recovery_burden_proxy",
         "exposure_proxy",
-        "energy_cost",
+        "Cstam",
+        "time_cost",
     ]
 
     ranges = _build_ranges(merged_records, score_fields)
@@ -279,8 +308,6 @@ def get_top_actions(scored_results: List[Dict[str, Any]], top_n: int = 5) -> Lis
 
 
 if __name__ == "__main__":
-    # 建议在项目根目录使用模块方式运行：
-    # python -m models.attack_scoring
     try:
         from config.action_library import get_action_list
         from models.attack_dynamics import batch_calculate_dynamics
