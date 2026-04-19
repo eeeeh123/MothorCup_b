@@ -233,24 +233,53 @@ def compute_total_score(
     stability_penalty_score = compute_stability_penalty(record, ranges, weights)
     energy_penalty_score = compute_energy_penalty(record, ranges, weights)
 
+    # -----------------------------
+    # 新增：综合惩罚值（1~5） -> 惩罚分（0~100）
+    # 1 表示惩罚最低，5 表示惩罚最高
+    # -----------------------------
+    composite_penalty_raw = float(record.get("composite_penalty", 0.0))
+    if composite_penalty_raw > 0:
+        composite_penalty_score = (composite_penalty_raw - 1.0) / 4.0 * 100.0
+    else:
+        composite_penalty_score = 0.0
+
+    # 原惩罚项转收益项
     stability_benefit_score = 100.0 - stability_penalty_score
     energy_efficiency_score = 100.0 - energy_penalty_score
+    composite_benefit_score = 100.0 - composite_penalty_score
+
+    # -----------------------------
+    # 新增 composite_penalty 后，
+    # 不改 AttackScoreWeights 结构，
+    # 直接把原三项权重按 0.90 缩放，给新项留 0.10
+    # 原默认权重：0.60 / 0.25 / 0.15
+    # 缩放后：0.54 / 0.225 / 0.135，再加 0.10 = 1.00
+    # -----------------------------
+    attack_gain_weight_adj = weights.attack_gain_weight * 0.90
+    stability_weight_adj = weights.stability_weight * 0.90
+    energy_weight_adj = weights.energy_efficiency_weight * 0.90
+    composite_penalty_weight = 0.10
 
     total_score = (
-        weights.attack_gain_weight * attack_gain_score
-        + weights.stability_weight * stability_benefit_score
-        + weights.energy_efficiency_weight * energy_efficiency_score
+        attack_gain_weight_adj * attack_gain_score
+        + stability_weight_adj * stability_benefit_score
+        + energy_weight_adj * energy_efficiency_score
+        + composite_penalty_weight * composite_benefit_score
     )
 
     return {
         "attack_gain_score": attack_gain_score,
         "stability_penalty_score": stability_penalty_score,
         "energy_penalty_score": energy_penalty_score,
+        "composite_penalty_score": composite_penalty_score,
         "stability_benefit_score": stability_benefit_score,
         "energy_efficiency_score": energy_efficiency_score,
+        "composite_benefit_score": composite_benefit_score,
         "total_score": total_score,
     }
 
+def get_composite_penalty(action: dict) -> float:
+    return float(action.get("composite_penalty", 0.0))
 
 def score_actions(
     dynamics_results: Iterable[Dict[str, Any]],

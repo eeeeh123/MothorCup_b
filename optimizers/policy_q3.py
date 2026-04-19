@@ -15,6 +15,15 @@ from models.transition import (
     ActionDecision,
 )
 
+# =========================================================
+# 复合惩罚先验（来自 action_library）
+# 若上游尚未配置，则自动回退为空映射，保证 Q3 可运行
+# =========================================================
+try:
+    from config.action_library import COMPOSITE_PENALTY_MAP
+except Exception:
+    COMPOSITE_PENALTY_MAP = {}
+
 
 # =========================================================
 # 一、配置
@@ -48,6 +57,10 @@ class PolicyQ3Config:
     # 对手动作池评估方式
     max_opp_candidates: int = 5
 
+    # 新增：动作先验综合惩罚（1~5）在 Q3 中的作用强度
+    action_penalty_weight: float = 6.0
+    rollout_action_penalty_weight: float = 6.0
+
 
 DEFAULT_CONFIG = PolicyQ3Config()
 
@@ -57,13 +70,13 @@ DEFAULT_CONFIG = PolicyQ3Config()
 # =========================================================
 class Q3PolicyEngine:
     """
-    Q3 策略引擎（第一版）
+    Q3 策略引擎（复合惩罚联动版）
 
     核心思想：
     - 枚举当前可选动作
     - 枚举对手候选动作池
     - 调用 transition.step(..., mode='expected') 做一步前瞻
-    - 计算 即时奖励 + gamma * 下一状态价值
+    - 计算 即时奖励 + gamma * 下一状态价值 - 动作先验惩罚
     - 选择价值最高动作
     """
 
@@ -72,7 +85,38 @@ class Q3PolicyEngine:
         self.engine = TransitionEngine()
 
     # =====================================================
-    # 三、候选动作生成
+    # 三、复合惩罚工具函数
+    # =====================================================
+    @staticmethod
+    def get_action_composite_penalty(action_key: Optional[str]) -> float:
+        if not action_key:
+            return 0.0
+        try:
+            return float(COMPOSITE_PENALTY_MAP.get(action_key, 0.0))
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def normalize_composite_penalty(raw_penalty: float) -> float:
+        if raw_penalty <= 0:
+            return 0.0
+        return max(0.0, min(1.0, (raw_penalty - 1.0) / 4.0))
+
+    def action_penalty_value(
+        self,
+        action: ActionDecision,
+        weight: Optional[float] = None,
+    ) -> float:
+        if action.action_type != "attack":
+            return 0.0
+
+        raw_penalty = self.get_action_composite_penalty(action.action_key)
+        norm_penalty = self.normalize_composite_penalty(raw_penalty)
+        factor = self.config.action_penalty_weight if weight is None else weight
+        return factor * norm_penalty
+
+    # =====================================================
+    # 四、候选动作生成
     # =====================================================
     def _attack_candidates(self, state: RoundState, side: str) -> List[str]:
         me = state.my if side == "my" else state.opp
@@ -89,21 +133,17 @@ class Q3PolicyEngine:
         else:  # clinch
             pool = ["A09", "A12", "A03"]  # 膝撞、冲撞、组合拳
 
-        # 体力低时删去高成本动作
         if me.energy < 25:
             pool = [a for a in pool if a not in {"A06", "A11", "A12"}]
 
-        # 稳定性低时删去高风险动作
         if me.stability < 35:
             pool = [a for a in pool if a not in {"A06", "A11", "A12"}]
 
-        # 对方失衡时倾向可追击动作
         opp = state.opp if side == "my" else state.my
         if opp.posture == PostureState.OFF_BALANCE:
             bonus_pool = ["A03", "A09", "A12"]
             pool = bonus_pool + [x for x in pool if x not in bonus_pool]
 
-        # 去重并截断
         uniq = []
         for x in pool:
             if x not in uniq:
@@ -126,7 +166,6 @@ class Q3PolicyEngine:
         else:  # clinch
             pool = ["D12", "D15", "D14", "D08"]  # 沉身、卸力、重心补偿、后撤
 
-        # 稳定性低时优先平衡类
         if me.stability < 35:
             priority = ["D14", "D15", "D12"]
             pool = priority + [x for x in pool if x not in priority]
@@ -141,26 +180,21 @@ class Q3PolicyEngine:
     def build_candidate_actions(self, state: RoundState, side: str) -> List[ActionDecision]:
         me = state.my if side == "my" else state.opp
 
-        # 倒地/恢复中：只允许 recover
         if me.posture in [PostureState.DOWNED, PostureState.RECOVERING]:
             return [ActionDecision("recover", None)]
 
         candidates: List[ActionDecision] = []
 
-        # attack
         for atk in self._attack_candidates(state, side):
             candidates.append(ActionDecision("attack", atk))
 
-        # defend
         for dfd in self._defense_candidates(state, side):
             candidates.append(ActionDecision("defend", dfd))
 
-        # hold / recover
         candidates.append(ActionDecision("hold", None))
         if me.energy < 30 or me.stability < 40:
             candidates.append(ActionDecision("recover", None))
 
-        # 去重
         uniq: List[ActionDecision] = []
         seen = set()
         for c in candidates:
@@ -171,15 +205,12 @@ class Q3PolicyEngine:
         return uniq
 
     def build_opponent_pool(self, state: RoundState, side: str) -> List[ActionDecision]:
-        """
-        为当前 side 评估动作时，构造对手的候选动作池。
-        """
         other = "opp" if side == "my" else "my"
         pool = self.build_candidate_actions(state, other)
         return pool[: self.config.max_opp_candidates]
 
     # =====================================================
-    # 四、状态价值函数
+    # 五、状态价值函数
     # =====================================================
     def state_value(self, state: RoundState, side: str) -> float:
         if side == "my":
@@ -210,7 +241,6 @@ class Q3PolicyEngine:
         value += self.config.score_weight * (my_score - opp_score)
         value += initiative_bonus
 
-        # 姿态奖励/惩罚
         if opp.posture == PostureState.OFF_BALANCE:
             value += self.config.opp_off_balance_bonus
         if opp.posture == PostureState.DOWNED:
@@ -220,7 +250,6 @@ class Q3PolicyEngine:
         if me.posture == PostureState.DOWNED:
             value -= self.config.my_downed_penalty
 
-        # 终局特殊值
         if state.is_finished():
             if state.winner == side:
                 value += self.config.terminal_win_bonus
@@ -232,7 +261,7 @@ class Q3PolicyEngine:
         return value
 
     # =====================================================
-    # 五、动作价值评估
+    # 六、动作价值评估
     # =====================================================
     def _simulate_pair(
         self,
@@ -241,9 +270,6 @@ class Q3PolicyEngine:
         my_action: ActionDecision,
         opp_action: ActionDecision,
     ):
-        """
-        统一从 side 视角调用 TransitionEngine.step
-        """
         if side == "my":
             return self.engine.step(
                 state=state,
@@ -266,14 +292,11 @@ class Q3PolicyEngine:
         action: ActionDecision,
         opp_pool: List[ActionDecision],
     ) -> float:
-        """
-        评估某个动作的期望价值：
-        Q(s,a) = E[R + gamma * V(s')]
-        """
         if not opp_pool:
             return -1e9
 
         total = 0.0
+        action_penalty = self.action_penalty_value(action)
 
         for opp_action in opp_pool:
             result = self._simulate_pair(state, side, action, opp_action)
@@ -284,13 +307,13 @@ class Q3PolicyEngine:
                 immediate_reward = result.reward_opp - 0.35 * result.reward_my
 
             future_value = self.state_value(result.next_state, side)
-            q = immediate_reward + self.config.gamma * future_value
+            q = immediate_reward + self.config.gamma * future_value - action_penalty
             total += q
 
         return total / len(opp_pool)
 
     # =====================================================
-    # 六、主策略接口
+    # 七、主策略接口
     # =====================================================
     def choose_action(
         self,
@@ -303,7 +326,6 @@ class Q3PolicyEngine:
         candidates = self.build_candidate_actions(state, side)
         opp_pool = self.build_opponent_pool(state, side)
 
-        # 安全兜底
         if not candidates:
             return ActionDecision("hold", None)
 
@@ -312,10 +334,8 @@ class Q3PolicyEngine:
             score = self.evaluate_action(state, side, action, opp_pool)
             scored.append((action, score))
 
-        # 从高到低排序
         scored.sort(key=lambda x: x[1], reverse=True)
 
-        # 取最优；若非常接近，则允许少量随机打散，避免策略过于机械
         best_action, best_score = scored[0]
         near_best = [item for item in scored if item[1] >= best_score - 1.0]
 
@@ -324,7 +344,7 @@ class Q3PolicyEngine:
 
 
 # =========================================================
-# 七、对外暴露的策略函数
+# 八、对外暴露的策略函数
 # =========================================================
 _default_policy_engine = Q3PolicyEngine()
 
@@ -335,14 +355,14 @@ def greedy_q3_policy(
     rng: random.Random,
 ) -> ActionDecision:
     """
-    Q3 第一版主策略：
-    一步前瞻 + expected 模式评估。
+    Q3 主策略：
+    一步前瞻 + expected 模式评估 + composite_penalty 联动。
     """
     return _default_policy_engine.choose_action(state, side, rng)
 
 
 # =========================================================
-# 八、可选：蒙特卡洛 rollout 策略（第二版增强入口）
+# 九、可选：蒙特卡洛 rollout 策略（第二版增强入口）
 # =========================================================
 def make_rollout_policy(
     rollout_steps: int = 3,
@@ -351,12 +371,6 @@ def make_rollout_policy(
 ):
     """
     返回一个“轻量 rollout Monte Carlo”策略函数。
-    这不是当前主策略，但你后面想增强时可以直接用。
-
-    思路：
-    - 对每个候选动作先走一步
-    - 然后随机/贪心混合 rollout 若干步
-    - 取平均总回报
     """
     engine = TransitionEngine()
     base_engine = Q3PolicyEngine(DEFAULT_CONFIG)
@@ -379,7 +393,6 @@ def make_rollout_policy(
             total_value = 0.0
 
             for _ in range(n_rollouts_per_action):
-                # 先对对手当前反应做一个随机抽样
                 opp_action = rng.choice(opp_pool) if opp_pool else ActionDecision("hold", None)
 
                 if side == "my":
@@ -399,14 +412,19 @@ def make_rollout_policy(
                         seed=rng.randint(1, 10**9),
                     )
 
-                rollout_state = result.next_state.clone()
-                g = (result.reward_my if side == "my" else result.reward_opp) - 0.35 * (
-                    result.reward_opp if side == "my" else result.reward_my
+                immediate_reward = (
+                    (result.reward_my if side == "my" else result.reward_opp)
+                    - 0.35 * (result.reward_opp if side == "my" else result.reward_my)
+                )
+                immediate_reward -= base_engine.action_penalty_value(
+                    action,
+                    weight=base_engine.config.rollout_action_penalty_weight,
                 )
 
+                rollout_state = result.next_state.clone()
+                g = immediate_reward
                 discount = gamma
 
-                # 后续 rollout
                 for _step in range(rollout_steps):
                     if rollout_state.is_finished():
                         break
@@ -423,9 +441,17 @@ def make_rollout_policy(
                     )
                     rollout_state = r2.next_state
 
-                    step_reward = (r2.reward_my if side == "my" else r2.reward_opp) - 0.35 * (
-                        r2.reward_opp if side == "my" else r2.reward_my
+                    step_reward = (
+                        (r2.reward_my if side == "my" else r2.reward_opp)
+                        - 0.35 * (r2.reward_opp if side == "my" else r2.reward_my)
                     )
+
+                    my_roll_action = my_roll if side == "my" else opp_roll
+                    step_reward -= base_engine.action_penalty_value(
+                        my_roll_action,
+                        weight=base_engine.config.rollout_action_penalty_weight,
+                    )
+
                     g += discount * step_reward
                     discount *= gamma
 
@@ -444,7 +470,7 @@ def make_rollout_policy(
 
 
 # =========================================================
-# 九、自测
+# 十、自测
 # =========================================================
 if __name__ == "__main__":
     from models.state import create_initial_round_state
@@ -459,6 +485,8 @@ if __name__ == "__main__":
 
     print("我方策略动作:", action_my.action_type, action_my.action_key)
     print("对方策略动作:", action_opp.action_type, action_opp.action_key)
+    print("我方动作复合惩罚:", _default_policy_engine.get_action_composite_penalty(action_my.action_key))
+    print("对方动作复合惩罚:", _default_policy_engine.get_action_composite_penalty(action_opp.action_key))
 
     rollout_policy = make_rollout_policy(rollout_steps=2, n_rollouts_per_action=4)
     action_my_rollout = rollout_policy(state, "my", rng)

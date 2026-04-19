@@ -62,6 +62,7 @@ class AttackAction:
             "rotation_risk_proxy": self.balance_risk,
             "recovery_burden_proxy": self.time_cost,
             "exposure_proxy": self.counter_risk,
+            "composite_penalty": COMPOSITE_PENALTY_MAP.get(self.code, 0.0),
         })
         return data
 
@@ -524,6 +525,21 @@ ATTACK_ACTIONS: Dict[str, AttackAction] = {
     ),
 }
 
+COMPOSITE_PENALTY_MAP = {
+    "A01": 1.0,  # 直拳
+    "A02": 1.5,  # 勾拳
+    "A03": 2.5,  # 组合拳
+    "A04": 2.5,  # 摆拳
+    "A05": 2.0,  # 前踢
+    "A06": 3.5,  # 侧踢
+    "A07": 5.0,  # 回旋踢
+    "A08": 2.5,  # 低扫腿
+    "A09": 2.0,  # 膝撞
+    "A10": 3.5,  # 拳腿组合
+    "A11": 4.5,  # 五连踢
+    "A12": 4.5,  # 冲撞
+    "A13": 1.5,  # 倒地反击
+}
 
 ACTION_ORDER: List[str] = [
     "A01", "A02", "A03", "A04", "A05", "A06", "A07",
@@ -562,5 +578,6 @@ def prepare_attack_records() -> List[Dict[str, Any]]:
 
 
 if __name__ == "__main__":
-    for item in get_action_list():
-        print(item["code"], item["name"], item["Ek"], item["F"], item["tactical_total_score"])
+    records = prepare_attack_records()
+    for r in records[:3]:
+        print(r["code"], r["name"], r.get("composite_penalty"))

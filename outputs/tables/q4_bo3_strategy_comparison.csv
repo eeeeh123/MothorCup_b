@@ -1,5 +1,5 @@
 ﻿experiment,description,my_policy,opp_policy,single_winner,single_reason,single_rounds_played,single_final_scoreline,single_my_round_wins,single_opp_round_wins,single_my_fault_level,single_opp_fault_level,single_resource_usage_count,n_runs,my_series_win_rate,opp_series_win_rate,draw_series_rate,avg_rounds_played,resource_usage_reset_total,resource_usage_timeout_total,resource_usage_repair_total
-q4_bo3_greedy_vs_simple_rule,BO3: greedy 对 simple_rule,greedy_q3_policy,simple_rule_policy,my,bo3_score,3,2:1,2,1,minor,critical,3,100,0.9,0.09,0.01,2.49,112,117,81
-q4_bo3_simple_rule_vs_simple_rule,BO3: simple_rule 对 simple_rule,simple_rule_policy,simple_rule_policy,opp,bo3_score,3,1:2,1,2,major,minor,4,100,0.48,0.51,0.01,2.9,115,158,115
-q4_bo3_greedy_vs_greedy,BO3: greedy 对 greedy,greedy_q3_policy,greedy_q3_policy,my,bo3_score,3,2:1,2,1,minor,critical,2,100,0.49,0.49,0.02,2.47,123,121,39
-q4_bo3_greedy_vs_random,BO3: greedy 对 random,greedy_q3_policy,random_policy,my,bo3_score,2,2:0,2,0,minor,critical,1,100,1.0,0.0,0.0,2.01,21,73,85
+q4_bo3_greedy_vs_simple_rule,BO3: greedy 对 simple_rule,greedy_q3_policy,simple_rule_policy,my,bo3_score,2,2:0,2,0,minor,critical,4,100,0.47,0.51,0.02,2.45,118,171,99
+q4_bo3_simple_rule_vs_simple_rule,BO3: simple_rule 对 simple_rule,simple_rule_policy,simple_rule_policy,my,bo3_score,2,2:0,2,0,minor,critical,4,100,0.47,0.51,0.02,2.45,118,171,99
+q4_bo3_greedy_vs_greedy,BO3: greedy 对 greedy,greedy_q3_policy,greedy_q3_policy,my,bo3_score,2,2:0,2,0,minor,critical,4,100,0.47,0.51,0.02,2.45,118,171,99
+q4_bo3_greedy_vs_random,BO3: greedy 对 random,greedy_q3_policy,random_policy,my,bo3_score,3,2:1,2,1,minor,minor,5,100,0.96,0.04,0.0,2.21,65,130,99
