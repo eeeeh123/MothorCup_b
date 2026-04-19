@@ -1,0 +1,8 @@
+﻿experiment,win_reason,count,ratio
+q3_greedy_vs_simple_rule,ko_like,198,0.99
+q3_greedy_vs_simple_rule,tiebreak_state,2,0.01
+q3_simple_rule_vs_simple_rule,ko_like,200,1.0
+q3_greedy_vs_greedy,ko_like,93,0.465
+q3_greedy_vs_greedy,tiebreak_state,101,0.505
+q3_greedy_vs_greedy,double_ko,6,0.03
+q3_greedy_vs_random,ko_like,200,1.0

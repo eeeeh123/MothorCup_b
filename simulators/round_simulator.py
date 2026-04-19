@@ -294,7 +294,7 @@ def simulate_round(
     - mode:
         - expected: 期望模式，适合先看整体趋势
         - sample: 采样模式，适合蒙特卡洛
-    - max_steps: 防止死循环
+    - max_steps: 防止死循环；若达到上限仍未结束，则启用扩展 tie-break 兜底
     """
     rng = random.Random(seed)
     engine = TransitionEngine()
@@ -352,7 +352,8 @@ def simulate_round(
         state = next_state
 
     if not state.is_finished():
-        state.finish_by_score()
+        state.log("达到 max_steps，触发仿真兜底扩展 tie-break。")
+        state.finish_by_extended_tiebreak()
 
     return RoundSimulationResult(
         final_state=state,

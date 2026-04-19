@@ -52,6 +52,8 @@ class WinReason(str, Enum):
     UNKNOWN = "unknown"
     DOUBLE_KO = "double_ko"
 
+    TIEBREAK_STATE = "tiebreak_state"
+    TIEBREAK_INITIATIVE = "tiebreak_initiative"
 
 # =========================================================
 # 二、单个机器人状态
@@ -255,7 +257,8 @@ class RoundState:
         """
         推进比赛时间。
         - 若常规时间结束，则进入加时
-        - 若加时也结束，则按代理得分判胜负
+        - 若加时也结束，则先按代理得分判定
+        - 若代理得分相同，则进入扩展 tie-break
         - 保留跨阶段时间溢出
         """
         if self.phase == RoundPhase.FINISHED:
@@ -359,25 +362,116 @@ class RoundState:
 
     def finish_by_score(self) -> None:
         """
-        时间耗尽后，按代理得分判定胜负。
+        时间耗尽后，先按代理得分判定。
+        若代理得分相同，则进入扩展 tie-break。
+        """
+        if self.phase == RoundPhase.FINISHED:
+            return
+
+        if self.my_score_proxy > self.opp_score_proxy:
+            self.phase = RoundPhase.FINISHED
+            self.winner = "my"
+            self.win_reason = WinReason.SCORE.value
+            self.log("时间耗尽，按代理得分判定 my 获胜。")
+            return
+
+        if self.opp_score_proxy > self.my_score_proxy:
+            self.phase = RoundPhase.FINISHED
+            self.winner = "opp"
+            self.win_reason = WinReason.SCORE.value
+            self.log("时间耗尽，按代理得分判定 opp 获胜。")
+            return
+
+        self.log("时间耗尽，代理得分相同，启用扩展 tie-break。")
+        self.finish_by_extended_tiebreak()
+
+    def is_finished(self) -> bool:
+        return self.phase == RoundPhase.FINISHED
+
+    def _posture_rank(self, posture: PostureState) -> int:
+        rank_map = {
+            PostureState.STANDING: 3,
+            PostureState.OFF_BALANCE: 2,
+            PostureState.RECOVERING: 1,
+            PostureState.DOWNED: 0,
+        }
+        return rank_map.get(posture, 0)
+
+    def _fighter_state_key(self, fighter: FighterState) -> float:
+        """
+        扩展 tie-break 的状态综合指标。
+        权重含义：
+        - hp_proxy：最重要
+        - stability：次重要
+        - energy：再次之
+        """
+        return (
+            1.00 * fighter.hp_proxy
+            + 0.60 * fighter.stability
+            + 0.20 * fighter.energy
+        )
+
+    def finish_by_extended_tiebreak(self) -> None:
+        """
+        加时结束后若代理得分仍相同，则使用扩展 tie-break。
+        判定顺序：
+        1) 状态综合指标
+        2) 姿态等级
+        3) 主动权
+        4) 仍无法区分则保留 draw
         """
         if self.phase == RoundPhase.FINISHED:
             return
 
         self.phase = RoundPhase.FINISHED
-        if self.my_score_proxy > self.opp_score_proxy:
+        eps = 1e-9
+
+        my_key = self._fighter_state_key(self.my)
+        opp_key = self._fighter_state_key(self.opp)
+
+        if my_key > opp_key + eps:
             self.winner = "my"
-        elif self.opp_score_proxy > self.my_score_proxy:
+            self.win_reason = WinReason.TIEBREAK_STATE.value
+            self.log("加时后同分，按扩展状态指标判定 my 获胜。")
+            return
+
+        if opp_key > my_key + eps:
             self.winner = "opp"
-        else:
-            self.winner = "draw"
+            self.win_reason = WinReason.TIEBREAK_STATE.value
+            self.log("加时后同分，按扩展状态指标判定 opp 获胜。")
+            return
+
+        my_posture_rank = self._posture_rank(self.my.posture)
+        opp_posture_rank = self._posture_rank(self.opp.posture)
+
+        if my_posture_rank > opp_posture_rank:
+            self.winner = "my"
+            self.win_reason = WinReason.TIEBREAK_STATE.value
+            self.log("加时后同分，按姿态等级判定 my 获胜。")
+            return
+
+        if opp_posture_rank > my_posture_rank:
+            self.winner = "opp"
+            self.win_reason = WinReason.TIEBREAK_STATE.value
+            self.log("加时后同分，按姿态等级判定 opp 获胜。")
+            return
+
+        if self.initiative == InitiativeState.MY:
+            self.winner = "my"
+            self.win_reason = WinReason.TIEBREAK_INITIATIVE.value
+            self.log("加时后同分，按主动权判定 my 获胜。")
+            return
+
+        if self.initiative == InitiativeState.OPP:
+            self.winner = "opp"
+            self.win_reason = WinReason.TIEBREAK_INITIATIVE.value
+            self.log("加时后同分，按主动权判定 opp 获胜。")
+            return
+
+        self.winner = "draw"
         self.win_reason = WinReason.SCORE.value
-        self.log("时间耗尽，按代理得分判定胜负。")
-
-    def is_finished(self) -> bool:
-        return self.phase == RoundPhase.FINISHED
-
-
+        self.log("加时后同分，扩展 tie-break 仍无法区分，保留 draw。")
+        
 # =========================================================
 # 四、状态初始化与辅助函数
 # =========================================================
