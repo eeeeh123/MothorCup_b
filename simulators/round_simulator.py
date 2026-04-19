@@ -434,7 +434,7 @@ if __name__ == "__main__":
     print("round_simulator.py 自测开始")
 
     my_policy_for_test = greedy_q3_policy
-    opp_policy_for_test = simple_rule_policy
+    opp_policy_for_test = greedy_q3_policy
 
     # 1) 单局 expected 模式
     single = simulate_round(

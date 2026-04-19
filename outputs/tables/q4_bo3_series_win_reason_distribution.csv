@@ -1,0 +1,9 @@
+﻿experiment,series_win_reason,count,ratio
+q4_bo3_greedy_vs_simple_rule,bo3_completed,45,0.45
+q4_bo3_greedy_vs_simple_rule,bo3_score,55,0.55
+q4_bo3_simple_rule_vs_simple_rule,bo3_completed,80,0.8
+q4_bo3_simple_rule_vs_simple_rule,bo3_score,20,0.2
+q4_bo3_greedy_vs_greedy,bo3_score,32,0.32
+q4_bo3_greedy_vs_greedy,bo3_completed,68,0.68
+q4_bo3_greedy_vs_random,bo3_score,98,0.98
+q4_bo3_greedy_vs_random,bo3_completed,2,0.02

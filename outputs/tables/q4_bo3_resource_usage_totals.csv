@@ -1,0 +1,13 @@
+﻿experiment,resource_type,count,avg_per_series
+q4_bo3_greedy_vs_simple_rule,reset,103,1.03
+q4_bo3_greedy_vs_simple_rule,timeout,127,1.27
+q4_bo3_greedy_vs_simple_rule,repair,113,1.13
+q4_bo3_simple_rule_vs_simple_rule,reset,115,1.15
+q4_bo3_simple_rule_vs_simple_rule,timeout,148,1.48
+q4_bo3_simple_rule_vs_simple_rule,repair,122,1.22
+q4_bo3_greedy_vs_greedy,reset,137,1.37
+q4_bo3_greedy_vs_greedy,timeout,146,1.46
+q4_bo3_greedy_vs_greedy,repair,79,0.79
+q4_bo3_greedy_vs_random,reset,21,0.21
+q4_bo3_greedy_vs_random,timeout,75,0.75
+q4_bo3_greedy_vs_random,repair,96,0.96

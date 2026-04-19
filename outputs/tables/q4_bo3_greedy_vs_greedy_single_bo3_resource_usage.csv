@@ -1,0 +1,3 @@
+﻿round_index,step_index,phase,side,resource_type,reason
+1,4,in_round,my,timeout,稳定性过低，触发局内暂停
+2,4,in_round,opp,reset,倒地后触发人工复位

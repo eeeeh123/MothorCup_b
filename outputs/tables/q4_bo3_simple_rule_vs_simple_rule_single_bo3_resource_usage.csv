@@ -1,0 +1,5 @@
+﻿round_index,step_index,phase,side,resource_type,reason
+1,8,in_round,opp,reset,倒地后触发人工复位
+3,0,pre_round,opp,repair,故障等级达到 MAJOR/CRITICAL，赛前优先维修
+3,5,in_round,my,timeout,失衡且稳定性偏低，触发局内暂停
+3,8,in_round,my,reset,倒地后触发人工复位
