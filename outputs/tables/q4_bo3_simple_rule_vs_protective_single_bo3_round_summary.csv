@@ -1,0 +1,3 @@
+﻿round_index,my_policy,opp_policy,winner,win_reason,total_steps,total_reward_my,total_reward_opp,my_hp_proxy,my_stability,my_energy,opp_hp_proxy,opp_stability,opp_energy,scoreline_after_round,resource_usage,resource_usage_count
+1,simple_rule_policy,protective_q3_policy,my,ko_like,12,118.68033333333332,0.6000000000000001,100.0,84.0,77.06000000000003,0.0,24.121333333333325,100.0,1:0,[],0
+2,simple_rule_policy,momentum_q3_policy,my,ko_like,9,132.42204761904762,88.21483333333333,30.20786666666667,34.06883333333332,77.64914285714289,0.0,7.980746666666665,93.5,2:0,"[{'round_index': 2, 'step_index': 4, 'phase': 'in_round', 'side': 'opp', 'resource_type': 'timeout', 'reason': '失衡且稳定性偏低，触发局内暂停'}]",1

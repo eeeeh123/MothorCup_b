@@ -3,21 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
-from simulators.bo3_simulator import (
-    simulate_bo3,
-    simulate_many_bo3,
+from simulators.bo3_simulator import simulate_bo3, simulate_many_bo3
+from simulators.round_simulator import PolicyFn, get_policy_name
+from optimizers.policy_q3 import greedy_q3_policy
+from optimizers.resource_policy_q4 import (
+    protective_q3_policy,
+    momentum_q3_policy,
+    risk_aware_q3_policy,
 )
-from simulators.round_simulator import (
-    PolicyFn,
-    simple_rule_policy,
-    random_policy,
-    get_policy_name,
-)
-from optimizers.policy_q3 import greedy_q3_policy, make_rollout_policy
+from simulators.round_simulator import simple_rule_policy
 
 
 # -----------------------------
@@ -42,63 +40,100 @@ plt.rcParams["axes.unicode_minus"] = False
 # -----------------------------
 # 实验配置
 # -----------------------------
-DEFAULT_N_RUNS = 100
+# 由于现在改为 5 种策略 round-robin 对比，默认样本数建议适度下调
+DEFAULT_N_RUNS = 50
 
-# 是否额外启用 rollout 策略对照
-ENABLE_ROLLOUT_EXPERIMENT = False
+# 是否包含自对弈（如 greedy vs greedy）
+INCLUDE_SELF_PLAY = True
 
-ROLLOUT_POLICY = make_rollout_policy(
-    rollout_steps=3,
-    n_rollouts_per_action=8,
-    gamma=0.92,
-)
+# 是否生成镜像实验（A_vs_B 与 B_vs_A 都跑）
+# 默认 False，减少运行时间；若要排除先后手影响，可设 True
+INCLUDE_MIRROR_MATCH = False
+
+# 直接参与对比的 Q3 策略集合
+POLICY_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "greedy_q3_policy": {
+        "policy": greedy_q3_policy,
+        "short_name": "greedy",
+        "description": "一步前瞻的主策略基线",
+    },
+    "simple_rule_policy": {
+        "policy": simple_rule_policy,
+        "short_name": "simple_rule",
+        "description": "轻量规则策略基线",
+    },
+    "protective_q3_policy": {
+        "policy": protective_q3_policy,
+        "short_name": "protective",
+        "description": "保护型策略：优先防守/恢复，仅在明显优势时追击",
+    },
+    "momentum_q3_policy": {
+        "policy": momentum_q3_policy,
+        "short_name": "momentum",
+        "description": "动量型策略：主动权/对手失衡时加强压制，否则退回 simple_rule",
+    },
+    "risk_aware_q3_policy": {
+        "policy": risk_aware_q3_policy,
+        "short_name": "risk_aware",
+        "description": "风险感知策略：greedy 为主，但在高风险动作上做状态过滤",
+    },
+}
+
+COMPARE_POLICY_ORDER = [
+    "greedy_q3_policy",
+    "simple_rule_policy",
+    "protective_q3_policy",
+    "momentum_q3_policy",
+    "risk_aware_q3_policy",
+]
 
 
 def get_experiment_configs() -> List[Dict[str, Any]]:
-    experiments: List[Dict[str, Any]] = [
-        {
-            "exp_name": "q4_bo3_greedy_vs_simple_rule",
-            "my_policy": greedy_q3_policy,
-            "opp_policy": simple_rule_policy,
-            "description": "BO3: greedy 对 simple_rule",
-        },
-        {
-            "exp_name": "q4_bo3_simple_rule_vs_simple_rule",
-            "my_policy": simple_rule_policy,
-            "opp_policy": simple_rule_policy,
-            "description": "BO3: simple_rule 对 simple_rule",
-        },
-        {
-            "exp_name": "q4_bo3_greedy_vs_greedy",
-            "my_policy": greedy_q3_policy,
-            "opp_policy": greedy_q3_policy,
-            "description": "BO3: greedy 对 greedy",
-        },
-        {
-            "exp_name": "q4_bo3_greedy_vs_random",
-            "my_policy": greedy_q3_policy,
-            "opp_policy": random_policy,
-            "description": "BO3: greedy 对 random",
-        },
-    ]
+    """
+    生成 greedy / simple_rule / protective / momentum / risk_aware 的直接对比实验组。
 
-    if ENABLE_ROLLOUT_EXPERIMENT:
-        experiments.extend(
-            [
+    默认行为：
+    - 跑上三角 round-robin（避免重复）
+    - 包含自对弈
+    - 不跑镜像实验
+    """
+    experiments: List[Dict[str, Any]] = []
+
+    for i, my_name in enumerate(COMPARE_POLICY_ORDER):
+        start_j = i if INCLUDE_SELF_PLAY else i + 1
+        for j in range(start_j, len(COMPARE_POLICY_ORDER)):
+            opp_name = COMPARE_POLICY_ORDER[j]
+
+            my_item = POLICY_REGISTRY[my_name]
+            opp_item = POLICY_REGISTRY[opp_name]
+
+            exp_name = f"q4_bo3_{my_item['short_name']}_vs_{opp_item['short_name']}"
+            description = f"BO3: {my_item['short_name']} 对 {opp_item['short_name']}"
+
+            experiments.append(
                 {
-                    "exp_name": "q4_bo3_rollout_vs_simple_rule",
-                    "my_policy": ROLLOUT_POLICY,
-                    "opp_policy": simple_rule_policy,
-                    "description": "BO3: rollout 对 simple_rule",
-                },
-                {
-                    "exp_name": "q4_bo3_rollout_vs_greedy",
-                    "my_policy": ROLLOUT_POLICY,
-                    "opp_policy": greedy_q3_policy,
-                    "description": "BO3: rollout 对 greedy",
-                },
-            ]
-        )
+                    "exp_name": exp_name,
+                    "my_policy": my_item["policy"],
+                    "opp_policy": opp_item["policy"],
+                    "description": description,
+                    "my_policy_name": my_name,
+                    "opp_policy_name": opp_name,
+                }
+            )
+
+            if INCLUDE_MIRROR_MATCH and my_name != opp_name:
+                mirror_exp_name = f"q4_bo3_{opp_item['short_name']}_vs_{my_item['short_name']}"
+                mirror_description = f"BO3: {opp_item['short_name']} 对 {my_item['short_name']}"
+                experiments.append(
+                    {
+                        "exp_name": mirror_exp_name,
+                        "my_policy": opp_item["policy"],
+                        "opp_policy": my_item["policy"],
+                        "description": mirror_description,
+                        "my_policy_name": opp_name,
+                        "opp_policy_name": my_name,
+                    }
+                )
 
     return experiments
 
@@ -261,7 +296,7 @@ def plot_series_win_rate_comparison(comparison_df: pd.DataFrame, output_path: Pa
     x = np.arange(len(comparison_df))
     width = 0.25
 
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig, ax = plt.subplots(figsize=(max(12, len(comparison_df) * 0.8), 7))
     ax.bar(x - width, comparison_df["my_series_win_rate"], width, label="my_series_win_rate", edgecolor="black")
     ax.bar(x, comparison_df["opp_series_win_rate"], width, label="opp_series_win_rate", edgecolor="black")
     ax.bar(x + width, comparison_df["draw_series_rate"], width, label="draw_series_rate", edgecolor="black")
@@ -270,7 +305,7 @@ def plot_series_win_rate_comparison(comparison_df: pd.DataFrame, output_path: Pa
     ax.set_xlabel("实验组", fontsize=12)
     ax.set_ylabel("比例", fontsize=12)
     ax.set_xticks(x)
-    ax.set_xticklabels(comparison_df["experiment"], rotation=20, ha="right")
+    ax.set_xticklabels(comparison_df["experiment"], rotation=30, ha="right")
     ax.legend()
 
     plt.tight_layout()
@@ -282,13 +317,13 @@ def plot_avg_rounds_played(comparison_df: pd.DataFrame, output_path: Path) -> No
     if comparison_df.empty:
         return
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(max(10, len(comparison_df) * 0.75), 6))
     bars = ax.bar(comparison_df["experiment"], comparison_df["avg_rounds_played"], edgecolor="black")
 
     ax.set_title("Q4 不同 BO3 策略组合平均局数", fontsize=16)
     ax.set_xlabel("实验组", fontsize=12)
     ax.set_ylabel("avg_rounds_played", fontsize=12)
-    plt.xticks(rotation=20, ha="right")
+    plt.xticks(rotation=30, ha="right")
 
     for bar, value in zip(bars, comparison_df["avg_rounds_played"]):
         ax.text(
@@ -315,7 +350,7 @@ def plot_resource_usage_comparison(resource_totals_df: pd.DataFrame, output_path
         .sort_index()
     )
 
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig, ax = plt.subplots(figsize=(max(12, len(pivot_df) * 0.8), 7))
     bottom = np.zeros(len(pivot_df))
 
     for col in pivot_df.columns:
@@ -328,7 +363,7 @@ def plot_resource_usage_comparison(resource_totals_df: pd.DataFrame, output_path
     ax.set_ylabel("avg_per_series", fontsize=12)
     ax.legend()
 
-    plt.xticks(rotation=20, ha="right")
+    plt.xticks(rotation=30, ha="right")
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
@@ -344,7 +379,7 @@ def plot_scoreline_distribution(scoreline_df: pd.DataFrame, output_path: Path) -
         .sort_index()
     )
 
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig, ax = plt.subplots(figsize=(max(12, len(pivot_df) * 0.8), 7))
     bottom = np.zeros(len(pivot_df))
 
     for col in pivot_df.columns:
@@ -357,7 +392,7 @@ def plot_scoreline_distribution(scoreline_df: pd.DataFrame, output_path: Path) -
     ax.set_ylabel("比例", fontsize=12)
     ax.legend()
 
-    plt.xticks(rotation=20, ha="right")
+    plt.xticks(rotation=30, ha="right")
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
@@ -432,7 +467,6 @@ def run_one_experiment(
     scoreline_rows = build_scoreline_rows(exp_name, many_result)
     resource_total_rows = build_resource_total_rows(exp_name, many_result)
 
-    # 导出单次 BO3 的详细结果
     round_summary_df = build_bo3_round_summary_dataframe(single_result)
     resource_usage_df = build_resource_usage_dataframe(single_result)
     resource_by_round_df = build_resource_usage_by_round_dataframe(single_result)
@@ -462,17 +496,21 @@ def run_one_experiment(
 
 
 def main() -> None:
-    print("run_q4.py 开始执行...")
+    print("run_q4.py 开始执行（多策略 round-robin 版）...")
 
     experiments = get_experiment_configs()
     print(f"实验组数量: {len(experiments)}")
+    print(f"每组多次 BO3 样本数: {DEFAULT_N_RUNS}")
+    print("参与策略:", ", ".join(COMPARE_POLICY_ORDER))
 
     comparison_rows: List[Dict[str, Any]] = []
     reason_rows: List[Dict[str, Any]] = []
     scoreline_rows: List[Dict[str, Any]] = []
     resource_total_rows: List[Dict[str, Any]] = []
 
-    for exp in experiments:
+    total_exps = len(experiments)
+    for idx, exp in enumerate(experiments, start=1):
+        print(f"\n>>> [{idx}/{total_exps}] 开始实验: {exp['exp_name']}")
         row, rows_reason, rows_scoreline, rows_resource = run_one_experiment(
             exp_name=exp["exp_name"],
             description=exp["description"],
@@ -484,6 +522,7 @@ def main() -> None:
         reason_rows.extend(rows_reason)
         scoreline_rows.extend(rows_scoreline)
         resource_total_rows.extend(rows_resource)
+        print(f">>> [{idx}/{total_exps}] 完成实验: {exp['exp_name']}")
 
     comparison_df = pd.DataFrame(comparison_rows)
     reason_df = pd.DataFrame(reason_rows)

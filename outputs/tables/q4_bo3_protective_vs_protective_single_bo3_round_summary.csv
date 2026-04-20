@@ -1,0 +1,4 @@
+﻿round_index,my_policy,opp_policy,winner,win_reason,total_steps,total_reward_my,total_reward_opp,my_hp_proxy,my_stability,my_energy,opp_hp_proxy,opp_stability,opp_energy,scoreline_after_round,resource_usage,resource_usage_count
+1,protective_q3_policy,protective_q3_policy,draw,proxy_score,500,0.0,0.0,100.0,100.0,100.0,100.0,100.0,100.0,0:0,[],0
+2,protective_q3_policy,protective_q3_policy,draw,proxy_score,500,0.0,0.0,100.0,100.0,100.0,100.0,100.0,100.0,0:0,[],0
+3,protective_q3_policy,protective_q3_policy,draw,proxy_score,500,0.0,0.0,100.0,100.0,100.0,100.0,100.0,100.0,0:0,[],0

@@ -1,0 +1,4 @@
+﻿round_index,my_policy,opp_policy,winner,win_reason,scoreline_after_round,my_reset_count,my_timeout_count,my_repair_count,opp_reset_count,opp_timeout_count,opp_repair_count,resource_usage_count
+1,simple_rule_policy,momentum_q3_policy,opp,ko_like,0:1,0,0,0,0,0,0,0
+2,greedy_q3_policy,momentum_q3_policy,my,tiebreak_state,1:1,0,0,1,1,0,0,2
+3,simple_rule_policy,momentum_q3_policy,my,ko_like,2:1,0,0,0,0,1,0,1

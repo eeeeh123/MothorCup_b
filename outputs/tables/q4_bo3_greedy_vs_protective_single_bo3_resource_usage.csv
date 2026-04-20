@@ -1,0 +1,2 @@
+﻿round_index,step_index,phase,side,resource_type,reason
+2,2,in_round,opp,timeout,失衡且稳定性偏低，触发局内暂停
