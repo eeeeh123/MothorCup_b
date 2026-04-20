@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from collections import Counter, defaultdict
 from dataclasses import dataclass, asdict
 from typing import Any, Callable, Dict, List, Optional
 
@@ -8,17 +9,16 @@ from config.rules import get_modeling_rule_subset
 from models.state import (
     RoundState,
     DistanceState,
-    InitiativeState,
     PostureState,
     create_initial_round_state,
 )
 from models.transition import (
     TransitionEngine,
     ActionDecision,
-    TransitionResult,
 )
-
 from optimizers.policy_q3 import greedy_q3_policy
+from optimizers.policy_q3_minimax_one_step import minimax_one_step_q3_policy
+
 
 RULE = get_modeling_rule_subset()
 
@@ -27,13 +27,13 @@ RULE = get_modeling_rule_subset()
 # 输出：ActionDecision
 PolicyFn = Callable[[RoundState, str, random.Random], ActionDecision]
 
+
 def get_policy_name(policy: PolicyFn) -> str:
-    """
-    返回策略函数名，便于打印。
-    """
+    """返回策略函数名，便于打印。"""
     if hasattr(policy, "__name__"):
         return policy.__name__
     return policy.__class__.__name__
+
 
 # =========================================================
 # 一、仿真输出数据结构
@@ -82,6 +82,12 @@ class RoundSimulationResult:
     step_records: List[StepRecord]
     event_log: List[str]
 
+    # 新增：动作分布统计
+    my_action_counter: Dict[str, int]
+    opp_action_counter: Dict[str, int]
+    my_action_counter_by_distance: Dict[str, Dict[str, int]]
+    opp_action_counter_by_distance: Dict[str, Dict[str, int]]
+
     def to_summary_dict(self) -> Dict[str, Any]:
         return {
             "winner": self.winner,
@@ -97,6 +103,10 @@ class RoundSimulationResult:
             "opp_hp_proxy": self.final_state.opp.hp_proxy,
             "opp_stability": self.final_state.opp.stability,
             "opp_energy": self.final_state.opp.energy,
+            "my_action_counter": self.my_action_counter,
+            "opp_action_counter": self.opp_action_counter,
+            "my_action_counter_by_distance": self.my_action_counter_by_distance,
+            "opp_action_counter_by_distance": self.opp_action_counter_by_distance,
         }
 
 
@@ -112,17 +122,14 @@ def random_policy(
     最简单的随机策略。
     用于验证仿真链条是否通。
     """
-    # 这批动作 key 基于当前已写好的项目
     attack_keys = ["A01", "A02", "A03", "A05", "A06", "A08", "A09", "A12"]
     defend_keys = ["D01", "D02", "D04", "D08", "D09", "D12", "D14", "D15", "D22"]
 
     fighter = state.my if side == "my" else state.opp
 
-    # 若正在恢复/倒地，优先 recover
     if fighter.posture in [PostureState.DOWNED, PostureState.RECOVERING]:
         return ActionDecision(action_type="recover", action_key=None)
 
-    # 能量太低则保守
     if fighter.energy < 20:
         return rng.choice(
             [
@@ -155,45 +162,40 @@ def simple_rule_policy(
     me = state.my if side == "my" else state.opp
     opp = state.opp if side == "my" else state.my
 
-    # 1. 倒地或恢复中：优先 recover
     if me.posture in [PostureState.DOWNED, PostureState.RECOVERING]:
         return ActionDecision("recover", None)
 
-    # 2. 自身稳定性太低：优先防守或恢复
     if me.stability < 30:
         return rng.choice([
-            ActionDecision("defend", "D14"),  # 重心补偿
-            ActionDecision("defend", "D15"),  # 卸力缓冲
+            ActionDecision("defend", "D14"),
+            ActionDecision("defend", "D15"),
             ActionDecision("recover", None),
         ])
 
-    # 3. 能量过低：保守
     if me.energy < 18:
         return rng.choice([
-            ActionDecision("defend", "D11"),  # 护头防御
-            ActionDecision("defend", "D22"),  # 挡→撤→绕
+            ActionDecision("defend", "D11"),
+            ActionDecision("defend", "D22"),
             ActionDecision("hold", None),
         ])
 
-    # 4. 若对方失衡，优先追击
     if opp.posture == PostureState.OFF_BALANCE:
         if state.distance in [DistanceState.NEAR, DistanceState.CLINCH]:
             return rng.choice([
-                ActionDecision("attack", "A09"),  # 膝撞
-                ActionDecision("attack", "A12"),  # 冲撞
-                ActionDecision("attack", "A03"),  # 组合拳
+                ActionDecision("attack", "A09"),
+                ActionDecision("attack", "A12"),
+                ActionDecision("attack", "A03"),
             ])
         return rng.choice([
-            ActionDecision("attack", "A06"),  # 侧踢
-            ActionDecision("attack", "A05"),  # 前踢
-            ActionDecision("attack", "A08"),  # 低扫腿
+            ActionDecision("attack", "A06"),
+            ActionDecision("attack", "A05"),
+            ActionDecision("attack", "A08"),
         ])
 
-    # 5. 根据距离选动作
     if state.distance == DistanceState.FAR:
         return rng.choice([
-            ActionDecision("attack", "A05"),  # 前踢
-            ActionDecision("attack", "A06"),  # 侧踢
+            ActionDecision("attack", "A05"),
+            ActionDecision("attack", "A06"),
             ActionDecision("hold", None),
         ])
 
@@ -202,81 +204,27 @@ def simple_rule_policy(
             ActionDecision("attack", "A05"),
             ActionDecision("attack", "A06"),
             ActionDecision("attack", "A08"),
-            ActionDecision("defend", "D09"),  # 转身闪避
+            ActionDecision("defend", "D09"),
         ])
 
     if state.distance == DistanceState.NEAR:
         return rng.choice([
-            ActionDecision("attack", "A01"),  # 直拳
-            ActionDecision("attack", "A03"),  # 组合拳
-            ActionDecision("attack", "A09"),  # 膝撞
-            ActionDecision("defend", "D03"),  # 肘挡
+            ActionDecision("attack", "A01"),
+            ActionDecision("attack", "A03"),
+            ActionDecision("attack", "A09"),
+            ActionDecision("defend", "D03"),
         ])
 
-    # clinch
     return rng.choice([
         ActionDecision("attack", "A09"),
         ActionDecision("attack", "A12"),
-        ActionDecision("defend", "D12"),      # 沉身防御
-        ActionDecision("defend", "D15"),      # 卸力缓冲
+        ActionDecision("defend", "D12"),
+        ActionDecision("defend", "D15"),
     ])
 
 
 # =========================================================
-# 四、距离更新（简单版）
-# =========================================================
-def update_distance_simple(
-    state: RoundState,
-    my_decision: ActionDecision,
-    opp_decision: ActionDecision,
-    rng: random.Random,
-) -> None:
-    """
-    第一版简单距离更新规则。
-    后续可在 transition.py 或独立 motion 模块中细化。
-    """
-    current = state.distance
-
-    # 若双方都 hold / defend，则距离更可能拉开一点
-    if my_decision.action_type in ["hold", "defend"] and opp_decision.action_type in ["hold", "defend"]:
-        if current == DistanceState.CLINCH:
-            state.set_distance(DistanceState.NEAR)
-        elif current == DistanceState.NEAR:
-            state.set_distance(DistanceState.MID)
-        return
-
-    # 若出现冲撞/膝撞等近身动作，更可能进入近距离或缠斗
-    close_attack_keys = {"A09", "A12"}  # 膝撞、冲撞
-    if my_decision.action_key in close_attack_keys or opp_decision.action_key in close_attack_keys:
-        if current == DistanceState.FAR:
-            state.set_distance(DistanceState.MID)
-        elif current == DistanceState.MID:
-            state.set_distance(DistanceState.NEAR)
-        else:
-            state.set_distance(DistanceState.CLINCH if rng.random() < 0.35 else DistanceState.NEAR)
-        return
-
-    # 若双方都在中远距离用腿法，更可能保持 mid
-    mid_attack_keys = {"A05", "A06", "A08"}  # 前踢、侧踢、低扫腿
-    if my_decision.action_key in mid_attack_keys or opp_decision.action_key in mid_attack_keys:
-        if current == DistanceState.CLINCH:
-            state.set_distance(DistanceState.NEAR)
-        else:
-            state.set_distance(DistanceState.MID)
-        return
-
-    # 否则做一个温和随机游走
-    transitions = {
-        DistanceState.FAR: [DistanceState.FAR, DistanceState.MID],
-        DistanceState.MID: [DistanceState.FAR, DistanceState.MID, DistanceState.NEAR],
-        DistanceState.NEAR: [DistanceState.MID, DistanceState.NEAR, DistanceState.CLINCH],
-        DistanceState.CLINCH: [DistanceState.NEAR, DistanceState.CLINCH],
-    }
-    state.set_distance(rng.choice(transitions[current]))
-
-
-# =========================================================
-# 五、单回合仿真
+# 四、单回合仿真
 # =========================================================
 def simulate_round(
     my_policy: PolicyFn = simple_rule_policy,
@@ -295,6 +243,10 @@ def simulate_round(
         - expected: 期望模式，适合先看整体趋势
         - sample: 采样模式，适合蒙特卡洛
     - max_steps: 防止死循环；若达到上限仍未结束，则启用扩展 tie-break 兜底
+
+    注意：
+    - 距离更新已内收到 models.transition.TransitionEngine.step() 中
+    - 这里不再做外部距离更新，避免重复推进距离状态
     """
     rng = random.Random(seed)
     engine = TransitionEngine()
@@ -305,9 +257,25 @@ def simulate_round(
     total_reward_opp = 0.0
     step_records: List[StepRecord] = []
 
+    my_action_counter = Counter()
+    opp_action_counter = Counter()
+
+    my_action_counter_by_distance = defaultdict(Counter)
+    opp_action_counter_by_distance = defaultdict(Counter)
+
     while not state.is_finished() and state.step_index < max_steps:
         my_decision = my_policy(state.clone(), "my", rng)
         opp_decision = opp_policy(state.clone(), "opp", rng)
+
+        my_key = f"{my_decision.action_type}:{my_decision.action_key or 'NONE'}"
+        opp_key = f"{opp_decision.action_type}:{opp_decision.action_key or 'NONE'}"
+
+        my_action_counter[my_key] += 1
+        opp_action_counter[opp_key] += 1
+
+        dist = state.distance.value
+        my_action_counter_by_distance[dist][my_key] += 1
+        opp_action_counter_by_distance[dist][opp_key] += 1
 
         result = engine.step(
             state=state,
@@ -318,10 +286,6 @@ def simulate_round(
         )
 
         next_state = result.next_state
-
-        # 简单距离更新（基于动作倾向）
-        if not next_state.is_finished():
-            update_distance_simple(next_state, my_decision, opp_decision, rng)
 
         step_record = StepRecord(
             step_index=next_state.step_index,
@@ -364,11 +328,19 @@ def simulate_round(
         total_reward_opp=total_reward_opp,
         step_records=step_records,
         event_log=state.event_log,
+        my_action_counter=dict(my_action_counter),
+        opp_action_counter=dict(opp_action_counter),
+        my_action_counter_by_distance={
+            k: dict(v) for k, v in my_action_counter_by_distance.items()
+        },
+        opp_action_counter_by_distance={
+            k: dict(v) for k, v in opp_action_counter_by_distance.items()
+        },
     )
 
 
 # =========================================================
-# 六、多次仿真（蒙特卡洛入口）
+# 五、多次仿真（蒙特卡洛入口）
 # =========================================================
 def simulate_many_rounds(
     n_runs: int = 100,
@@ -378,7 +350,7 @@ def simulate_many_rounds(
     seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    多次重复模拟，用于粗略胜率统计。
+    多次重复模拟，用于粗略胜率统计与动作分布统计。
     """
     rng = random.Random(seed)
 
@@ -390,6 +362,12 @@ def simulate_many_rounds(
     reward_my_list: List[float] = []
     reward_opp_list: List[float] = []
     step_count_list: List[int] = []
+
+    my_action_counter_total = Counter()
+    opp_action_counter_total = Counter()
+
+    my_action_counter_by_distance_total = defaultdict(Counter)
+    opp_action_counter_by_distance_total = defaultdict(Counter)
 
     for _ in range(n_runs):
         result = simulate_round(
@@ -413,6 +391,14 @@ def simulate_many_rounds(
         reward_opp_list.append(result.total_reward_opp)
         step_count_list.append(result.total_steps)
 
+        my_action_counter_total.update(result.my_action_counter)
+        opp_action_counter_total.update(result.opp_action_counter)
+
+        for dist, counter in result.my_action_counter_by_distance.items():
+            my_action_counter_by_distance_total[dist].update(counter)
+        for dist, counter in result.opp_action_counter_by_distance.items():
+            opp_action_counter_by_distance_total[dist].update(counter)
+
     def _avg(xs: List[float]) -> float:
         return sum(xs) / len(xs) if xs else 0.0
 
@@ -425,19 +411,30 @@ def simulate_many_rounds(
         "avg_reward_my": _avg(reward_my_list),
         "avg_reward_opp": _avg(reward_opp_list),
         "avg_step_count": _avg(step_count_list),
+        "my_action_counter_total": dict(my_action_counter_total),
+        "opp_action_counter_total": dict(opp_action_counter_total),
+        "my_action_counter_by_distance_total": {
+            k: dict(v) for k, v in my_action_counter_by_distance_total.items()
+        },
+        "opp_action_counter_by_distance_total": {
+            k: dict(v) for k, v in opp_action_counter_by_distance_total.items()
+        },
     }
 
 
 # =========================================================
-# 七、自测
+# 六、自测
 # =========================================================
 if __name__ == "__main__":
     print("round_simulator.py 自测开始")
 
+    # 这里改成你想测试的策略
     my_policy_for_test = greedy_q3_policy
     opp_policy_for_test = greedy_q3_policy
+    # 例如：
+    # my_policy_for_test = minimax_one_step_q3_policy
+    # opp_policy_for_test = simple_rule_policy
 
-    # 1) 单局 expected 模式
     single = simulate_round(
         my_policy=my_policy_for_test,
         opp_policy=opp_policy_for_test,
@@ -453,16 +450,21 @@ if __name__ == "__main__":
     print("steps:", single.total_steps)
     print("my total reward:", round(single.total_reward_my, 3))
     print("opp total reward:", round(single.total_reward_opp, 3))
-    print("final my hp/stability/energy:",
-          round(single.final_state.my.hp_proxy, 3),
-          round(single.final_state.my.stability, 3),
-          round(single.final_state.my.energy, 3))
-    print("final opp hp/stability/energy:",
-          round(single.final_state.opp.hp_proxy, 3),
-          round(single.final_state.opp.stability, 3),
-          round(single.final_state.opp.energy, 3))
+    print(
+        "final my hp/stability/energy:",
+        round(single.final_state.my.hp_proxy, 3),
+        round(single.final_state.my.stability, 3),
+        round(single.final_state.my.energy, 3),
+    )
+    print(
+        "final opp hp/stability/energy:",
+        round(single.final_state.opp.hp_proxy, 3),
+        round(single.final_state.opp.stability, 3),
+        round(single.final_state.opp.energy, 3),
+    )
+    print("single my top actions:", Counter(single.my_action_counter).most_common(5))
+    print("single opp top actions:", Counter(single.opp_action_counter).most_common(5))
 
-    # 2) 多局 sample 模式
     many = simulate_many_rounds(
         n_runs=200,
         my_policy=my_policy_for_test,
@@ -481,5 +483,15 @@ if __name__ == "__main__":
     print("avg reward opp:", round(many["avg_reward_opp"], 3))
     print("avg step count:", round(many["avg_step_count"], 3))
     print("win reasons:", many["win_reason_distribution"])
+    print("my top actions:", Counter(many["my_action_counter_total"]).most_common(10))
+    print("opp top actions:", Counter(many["opp_action_counter_total"]).most_common(10))
+
+    print("\n[my by distance top-5]")
+    for dist, counter in many["my_action_counter_by_distance_total"].items():
+        print(dist, Counter(counter).most_common(5))
+
+    print("\n[opp by distance top-5]")
+    for dist, counter in many["opp_action_counter_by_distance_total"].items():
+        print(dist, Counter(counter).most_common(5))
 
     print("\nround_simulator.py 自测完成")
